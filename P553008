@@ -1,0 +1,403 @@
+     ***************************************************************************
+     H DATFMT(*USA) TIMFMT(*HMS)
+     ***************************************************************************
+     **      Program name : P553008
+     **      Description  : create automatic PP forecast update
+     **      Created by   : DBELCHER
+     **      Created Date : 23 Jan 2019
+     ***************************************************************************
+     **
+     **    PROGRAM REVISION LOG
+     **    --------------------
+     **
+     **          Date     Programmer     Nature of Revision
+     **        --------   ----------  -----------------------------------
+     **        01/23/19   DBELCHER    NDEV-1724    Create
+     ***************************************************************************
+
+      * Item Branch File (IB)
+     FF4102     IF   E           K DISK
+      * WO Master File (WA)
+     FF4801     IF   E           K DISK
+      * Item Master (IM)
+     FF4101     IF   E           K DISK
+      * Item Ledger (IL)
+     FF4111     IF   E           K DISK
+      * item Location File (LI)
+     FF41021    IF   E           K DISK
+      * Forecast Fiel (MF)
+     FF3460LA   UF A E           K DISK
+      *
+      *
+     D#SIDAT           s              6a
+     D$$date           s              6s 0
+     D$#uorg           s             15s 0
+     DCurDte           s              6s 0
+     DCurFriN          s              6s 0
+     DPriorFriN        s              6s 0
+     DWk2FriN          s              6s 0
+     DWk3FriN          s              6s 0
+     DWk4FriN          s              6s 0
+     DWk5FriN          s              6s 0
+     DNbrDay           s              1s 0
+     DsysDtJul         s               d   datfmt(*jul) inz(*sys)
+     DsysDtUsa         s               d   datfmt(*usa) inz(*sys)
+     DsysTmHMS         s               t   timfmt(*hms) inz(*sys)
+     DDtRCDJ           s               d   datfmt(*jul)
+     DDtRCDJUSA        s               d   datfmt(*usa)
+     DRCTMTmHMS        s               t   timfmt(*hms)
+      *
+     DDtTmStmp         s               z
+     DDtISO            s               d   datfmt(*iso)
+     DTmISO            s               t   timfmt(*iso)
+     DDtJUL            s               d   datfmt(*jul)
+     D CvtDte          s               d
+     D CurFri          S               D
+     D PriorFri        S               D
+     D Wk2Fri          S               D
+     D Wk3Fri          S               D
+     D Wk4Fri          S               D
+     D Wk5Fri          S               D
+      *
+     D/COPY JDECPY,I00DSPROGL
+      *
+     D/COPY JDECPY,E9803L
+      *
+      *
+     ***************************************************************************
+     ***************************************************************************
+      * MAIN
+      *    Process HouseKeeping.
+     c                   exsr      s999
+      *                  ----      ----
+      *
+      *    Begin normal program processing.
+      *    --------------------------------
+      *
+     c     *in80         doweq     *off
+      *
+     c                   read      F4102                                  80
+      *
+      * stop processing if there are no more records to be processed
+      *
+     c     *in80         ifeq      *on
+     c                   move      *on           *INLR
+     c                   leave
+     c                   endif
+      *
+     c                   movel     ibitm         liitm
+     c                   movel     ibmcu         limcu
+      * Read the F41021 - Item Location File
+     c     liky01        chain     f41021                               81
+     c     *in81         doweq     *off
+      * Check for Business Unit
+     c     limcu         ifeq      '     8002500'
+     c     limcu         oreq      '     1412500'
+     c     limcu         oreq      '     1352500'
+      * Check for Lot Status; Approved, Cycle Count Hold, Temp QA Hold
+     c     lilots        ifeq      ' '
+     c     lilots        oreq      'C'
+     c     lilots        oreq      'T'
+      * accumulate qty on-hand
+     c                   eval      $#uorg += lipqoh
+      *
+      * Read "Work Order Master File" (F4801)
+     c                   eval      waitm  = liitm
+     c                   eval      wammcu = limcu
+     c                   eval      wadrqj = PriorFriN
+      *
+     c     wakyla        setll     f4801la                              82
+     c                   ENDDO
+      *
+      *   Update Kanban master record, if requested.
+      *
+     c                   if        $@upka = '1'
+     c                   movel(p)  $@nxst        KASTS1
+      *
+     c                   exsr      s020
+      *                  ----      ----
+     c                   update    i5543015
+      *                  ------    --------
+     c                   endif
+      *
+      *   Write ERP PO Receipt Record
+      *
+     c                   exsr      s010
+      *                  ----      ----
+      *
+     C                   ENDDO
+      *
+      * Terminate the program once all the records are processed
+     C                   move      *on           *inlr
+
+     ***************************************************************************
+     c     S010          begsr
+      ****************************************************************
+      *                                                              *
+      *   Write record to ERP PO Receipt (T5543023)                  *
+      *                                                              *
+      ****************************************************************
+      *
+     c                   movel(p)  KACNID        EPCNID
+     c                   movel(p)  KALITM        EPLITM
+     c                   movel(p)  KAMCU         EPMCU
+      *
+     c                   move(p)   KARCDJ        wk_RCDJ           6
+     c                   move(p)   KARCTM        wk_RCTM           6 0
+      *
+      * Receipt Date + Time should be greater than Ship Date + Time
+      *                  if        karcdj < kaaddj
+      *                  move(p)   KAADDJ        wk_RCDJ           6
+      *                  else
+      *                  move(p)   KARCDJ        wk_RCDJ           6
+      *                  endif
+      *
+      *                  if        karcdj <= kaaddj and
+      *                            (karctm <= katme0 or katme0 = 0)
+      *
+      *  If ShipTime is zero, default it to 11:58 pm
+      *                  if        katme0 <> 0
+      *                  eval      RCTMTmHms = %time(KATME0:*HMS)
+      *                  else
+      *                  eval      RCTMTmHms = %time(235800:*HMS)
+      *                  endif
+      *
+      *    RCTMTmHms     adddur    1:*MN         RCTMTmHms
+      *                  move(p)   RCTMTmHms     wk_RCTM
+      *                  else
+      *                  move(p)   KARCTM        wk_RCTM           6 0
+      *                  endif
+      *
+      * Convert Receipt Date (RCDJ) - JUL to mm/dd/yyyy
+      *
+     c                   eval      wk_RCDJ = %subst(wk_RCDJ:2:2)+'/'+
+     c                                       %subst(wk_RCDJ:4:3)
+     c                   eval      DtRCDJ = %date(wk_RCDJ:*JUL)
+     c                   eval      DtRCDJusa = DtRCDJ
+      *
+      * Convert Receipt Time (RCTM) - to hh:mm:ss
+      *
+     c                   eval      RCTMTmHms = %time(wk_RCTM:*HMS)
+      *
+     c                   eval      EP$nbd = %char(DtRCDJusa)+' '+
+     c                                      %char(RCTMTmHms)
+      *
+      * Force Ship Qty as Rcpt Qty
+      *
+     c                   if        $@FSHQ = '1'
+     c                   z-add     KAQTYT        EPUREC
+     c                   else
+     c                   z-add     KAUREC        EPUREC
+     c                   endif
+     c                   movel(p)  ' '           EPLOCN
+
+     c                   write     it5543023
+      *                  -----     ---------
+     C     S010e         endsr
+     ***************************************************************************
+     c     S020          begsr
+      ****************************************************************
+      *                                                              *
+      *   Populate Audit fields in F5543015                          *
+      *                                                              *
+      ****************************************************************
+      *  Audit fields
+     c                   movel     ##USER        KAUSER
+     c                   movel     ##PROG        KAPID
+     c                   movel     ##JOBN        KAJOBN
+     c                   move      nDtJul        KAUPMJ
+     c                   z-add     nTime         KATDAY
+     C     S020e         endsr
+     ***************************************************************************
+     c     S050          begsr
+      ****************************************************************
+      *                                                              *
+      *    Add duration to a date + time                             *
+      *    Input     1) Date (in Julian format)  $JulDtN(1YYDDD)     *
+      *              2) Time                     $ISOTmN(HHMMSS)     *
+      ****************************************************************
+      *
+      *    Convert JUL date to ISO format
+      *
+     c                   eval      DtISO = %date(%subst(%char($JulDtN):2:2)+'/'+
+     c                                     %subst(%char($JulDtN):4:3):*JUL)
+     c                   eval      TmISO = %time($ISOTmN:*ISO)
+      *
+      *    Create TimeStamp
+      *
+     c                   movel     *blanks       $DtTmStmpC       26
+     c                   eval      $DtTmStmpC = %char(DtISO:*ISO) + '-' +
+     c                                          %char(TmISO:*ISO)
+     c                   eval      DtTmStmp = %timestamp($DtTmStmpC)
+      *
+      *    Add 1 minute to timestamp
+      *
+     c                   adddur    1:*Minutes    DtTmStmp
+      *
+      *    Convert timestamp back to Jul Date
+      *
+     c                   eval      DtJul = %date(DtTmStmp)
+     c                   move      DtJul         $JulDtN           6 0
+      *
+      *    Convert timestamp back to Time
+      *
+     c                   eval      TmISO = %time(DtTmStmp)
+     c                   move      TmISO         $ISOTmN           6 0
+     C     S050e         endsr
+
+     c     S900          begsr
+      **************************************************************************
+      *
+      * Convert the Real Date to a *JUL
+      *
+      **************************************************************************
+     c/free
+         #SIDAT = %char( CvtDte : *usa0);
+     c/end-free
+     C                   MOVE      *BLANK        #EDAT             8
+     C                   MOVEL     '*SYSVAL '    #FFMT             7
+     C                   MOVEL     '*JUL    '    #TFMT             7
+     C                   MOVEL     '*NONE   '    #SEP              7
+     C                   MOVEL     ' '           $ERTST            1
+     C                   CALL      'X0028   '                           81
+      *                  ----      ----------
+     C                   PARM                    #SIDAT
+     C                   PARM                    #EDAT
+     C                   PARM                    #FFMT
+     C                   PARM                    #TFMT
+     C                   PARM                    #SEP
+     C                   PARM                    $ERTST
+     C                   MOVEL     #SIDAT        $$date
+
+     C     S900e         endsr
+
+     ***************************************************************************
+     c     S999          begsr
+      ****************************************************************
+      *                                                              *
+      *   HouseKeeping Subroutine                                    *
+      *                                                              *
+      ****************************************************************
+      *
+     ***************************************************************************
+      *
+     ***************************************************************************
+      *
+     c     *entry        plist
+     c                   parm                    PSPID            10
+     c                   parm                    PSVERS           10
+     C
+     C     *like         Define    EP$nbd        $dttm
+     c                   eval      $dttm  = %char(sysDtUsa)+' '+
+     c                                      %char(sysTmHMS)
+      * Key List for F41021 - Item Location File
+     c     liky01        klist
+     c                   kfld                    liitm
+     c                   kfld                    limcu
+      * Key List for F4801  - WO Master
+     c     wakyla        klist
+     c                   kfld                    waitm
+     c                   kfld                    wammcu
+     c                   kfld                    wadrqj
+      * Get System Date in Julian format
+     c                   move      sysDtJul      nDtJul            6 0
+     c                   add       100000        nDtJul
+     c                   move      sysTmHms      nTime             6 0
+      *
+      *    Retrieve Processing Options
+      *
+     c                   EXSR      C9803
+      *                  ----      -----
+      *
+      *     Load Processing Option for Next Status Update
+      *
+      *                  MOVEL     @OP(6)        $@NXST            1
+      *
+      *     Load Processing Option to  Update Kanban Master
+      *
+      *                  MOVEL     @OP(7)        $@UPKA            1
+      *                  if        $@UPKA <> '1'
+      *                 movel     *blanks       $@UPKA
+      *                  endif
+      *
+      *
+      *  Subtract 1 day from Current Date if Sat
+      *
+     c/EXEC SQL  set :NbrDay  = dayofweek(current date)
+     c/END-EXEC
+     c     NbrDay        ifeq      7
+     c/EXEC SQL  set :CurDte  = dayofweek(current date)- 1 day
+     c/END-EXEC
+     c                   else
+     c/EXEC SQL  set :CurDte  = dayofweek(current date)
+     c/END-EXEC
+     c                   ENDIF
+      *
+      * Find Current Week Friday date
+      *
+     c/EXEC SQL  set :CurFri  = Date(CurDte) +
+     c+ mod(13-dayofweek(Date(CurDte)),7) days
+     c/END-EXEC
+     c                   movel     CurFri        CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        CurFriN
+      *
+      * Find Prior Week Friday date
+      *
+     c/EXEC SQL  set :PriorFri  = Date(CurDte) -
+     c+ mod(1+dayofweek(Date(CurDte)),7) days
+     c/END-EXEC
+     c                   movel     PriorFri      CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        PriorFriN
+      *
+      * Find 2nd Week Friday date
+      *
+     c/EXEC SQL  set :Wk2Fri  = Date(CurDay) +
+     c+ mod(13-dayofweek(Date(CurDte)),7) days + 7 days
+     c/END-EXEC
+     c                   movel     Wk2Fri        CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        Wk2FriN
+      *
+      *
+      * Find 3rd Week Friday date
+      *
+     c/EXEC SQL  set :Wk3Fri  = Date(CurDte) +
+     c+ mod(13-dayofweek(Date(CurDte)),7) days + 14 days
+     c/END-EXEC
+     c                   movel     Wk3Fri        CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        Wk3FriN
+      *
+      *
+      * Find 4th Week Friday date
+      *
+     c/EXEC SQL  set :Wk4Fri  = Date(CurDte) +
+     c+ mod(13-dayofweek(Date(CurDte)),7) days + 21 days
+     c/END-EXEC
+     c                   movel     Wk4Fri        CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        Wk4FriN
+      *
+      * Find 5th Week Friday date
+      *
+     c/EXEC SQL  set :Wk5Fri  = Date(CurDte) +
+     c+ mod(13-dayofweek(Date(CurDte)),7) days + 28 days
+     c/END-EXEC
+     c                   movel     Wk5Fri        CvtDte
+     c                   exsr      s900
+     c                   movel     $$date        Wk5FriN
+      *
+      * Delete previous weeks PP Plan Request date records
+      *
+     c/EXEC SQL delete from f3460 where mftypf='PP' and mfdrqj<PriorFriN
+     c+ and   mfmcu in ('     1412500', '     8002500', '     1352500')
+     c/END-EXEC
+     c
+     c     S999e         endsr
+      *****************************************************************
+      *
+      *    Copy Common Subroutine - Retrieve Processing Options
+      *
+     C/COPY JDECPY,C9803L
